@@ -5,5 +5,7 @@
 *.jpeg
 *.pdf
 
+*sandbox/*
+
 *.ipynb_checkpoints/*
 *__pycache__/*
