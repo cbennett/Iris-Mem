@@ -351,8 +351,11 @@ def _compute_error_v_jit(xit, yit, outs):
                         error[2*n, m] = 1
                         error[2*n + 1, m] = -1
 
-                error[2*nfts, m] = -1  # originally: error[2*nfts] = -1
-                error[2*nfts + 1, m] = 1  # originally: error[2*nfts+1] = 1
+                error[-2] = -1
+                error[-1] = 1
+                # TODO: Why not?
+                #error[-2, m] = -1
+                #error[-1, m] = 1
 
             else: # LH case > incr pair weights
 
@@ -364,8 +367,11 @@ def _compute_error_v_jit(xit, yit, outs):
                         error[2*n, m] = -1
                         error[2*n + 1, m] = 1
 
-                error[2*nfts, m] = 1  # formerly: error[2*nfts] = 1
-                error[2*nfts + 1, m] = -1  # formerly: error[2*nfts+1] = -1
+                error[-2] = 1
+                error[-1] = -1
+                # TODO: Why not?
+                #error[-2, m] = 1
+                #error[-1, m] = -1
 
     return error
 
@@ -379,24 +385,26 @@ def _compute_error_v_numpy(xit, yit, outs):
     sign_comparisons = np.equal(outs_signs,  np.sign(yit))
     in_condition = (np.sign(xit) == 1)
 
+    ref_vals = np.where(outs_signs == 1, -1, 1)
+
     # Misc. convenience variables
     n_ind = np.arange(nfts, dtype=int)
     even_ind = 2*n_ind
     odd_ind = 2*n_ind + 1
 
-    for m, (out_sign, no_error) in enumerate(
-                                        zip(outs_signs, sign_comparisons)):
+    for m, (ref_val, no_error) in enumerate(zip(ref_vals, sign_comparisons)):
 
-        if no_error: # no error-case
+        if no_error: # no error-case, so skip the current iteration
             continue
-
-        ref_val = -1 if (out_sign == 1) else 1
 
         error[even_ind, m] = np.where(in_condition, ref_val, -ref_val)
         error[odd_ind, m] = np.where(in_condition, -ref_val, ref_val)
 
-        error[2*nfts, m] = ref_val  # formerly: error[2*nfts] = ref_val
-        error[2*nfts + 1, m] = -ref_val  # formerly: error[2*nfts+1] = -ref_val
+        error[-2] = ref_val
+        error[-1] = -ref_val
+        # TODO: Why not?
+        #error[-2, m] = 1
+        #error[-1, m] = -1
 
     return error
 
@@ -421,8 +429,11 @@ def _compute_error_v_vanilla(xit, yit, outs):
                         error[2*n, m] = 1
                         error[2*n + 1, m] = -1
 
-                error[2*nfts, m] = -1  # formerly: error[2*nfts] = -1
-                error[2*nfts + 1, m] = 1  # formerly: error[2*nfts+1] = 1
+                #error[2*nfts, m] = -1
+                #error[2*nfts + 1, m] = 1
+                # TODO: ??? Why was it formerly:
+                error[2*nfts] = -1
+                error[2*nfts + 1] = 1
 
             else:  # LH case > incr pair weights
                 for n in range(nfts):
@@ -434,8 +445,11 @@ def _compute_error_v_vanilla(xit, yit, outs):
                         error[2*n, m] = -1
                         error[2*n + 1, m] = 1
 
-                error[2*nfts, m] = 1  # formerly: error[2*nfts] = 1
-                error[2*nfts + 1, m] = -1  # formerly: error[2*nfts+1] = -1
+                #error[2*nfts, m] = 1
+                #error[2*nfts + 1, m] = -1
+                # TODO: ??? Why was it formerly:
+                error[2*nfts] = 1
+                error[2*nfts + 1] = -1
 
     return error
 
@@ -464,6 +478,73 @@ def compute_error_v(xit, yit, outs):
     # TODO: ensure input vectors with ``U = np.asarray(U)``?
     return _compute_error_v_jit(xit, yit, outs)
 
+
+def _compute_currents_vanilla(xit, G):
+    """More or less Chris' original version. """
+    nfts = len(xit)
+    xitsym = np.zeros(2*nfts + 2)
+
+    for _l in range(nfts):
+        xitsym[2*_l] = xit[_l]
+        xitsym[2*_l + 1] = -xit[_l]
+
+    xitsym[2*nfts] = 1
+    xitsym[2*nfts + 1] = -1
+
+    currents = np.dot(xitsym, G)
+
+    return currents
+
+
+def _compute_currents_numpy(xit, G):
+    nfts = len(xit)
+    xitsym = np.zeros(2*nfts + 2)
+
+    xitsym[0:2*nfts:2] = xit
+    xitsym[1:2*nfts + 1:2] = -xit
+    xitsym[-2] = 1
+    xitsym[-1] = -1
+
+    currents = xitsym @ G  # np.dot(xitsym, G) if Python < 3.5
+
+    return currents
+
+
+@jit(nopython=True)
+def _compute_currents_jit(xit, G):
+    """NB: this version avoids the temporary *xitsym* array. """
+    currents = np.zeros(G.shape[1])
+    for col in range(G.shape[1]):
+        for idx, val in enumerate(xit):
+            currents[col] += val*(G[2*idx, col] - G[2*idx + 1, col])
+
+        currents[col] += (G[-2, col] - G[-1, col])  # *val* is 1 here
+
+    return currents
+
+
+def compute_currents(xit, G):
+    """Given an input vector, compute the currents flowing at the crossbar
+    outputs.
+
+    Parameters
+    ----------
+    xit : 1D-ndarray
+        The input vector, of the same length as the number of
+        features *nfts*.
+
+    G : 2D-ndarray
+        The conductance values of the synaptic crossbar.  Shape is
+        ``(2*(nfts + 1), ncls)``, where *nfts* and *ncls* are the
+        number of features, resp. classes.
+
+    Returns
+    -------
+    currents : 1D-ndarray
+        The vector of output currents, of the same length as the number
+        of classes *ncls*.
+    """
+    return _compute_currents_jit(xit, G)
 
 #TO DO def Greal(...)
 
@@ -509,6 +590,16 @@ if __name__ == '__main__':
         outs[1] *= -np.sign(outs[1]*yit[1])  # ensure wrong answer
 
         return xit, yit, outs
+
+    def get_current_data(seed=None):
+        """Return dummy arguments for 'compute_currents*'-type functions. """
+        _prng = np.random.RandomState(seed)  # for reproducibility
+        nfts, ncls = 4*10, 3*10  # NB: bigger than in the iris case
+        xit = _prng.uniform(low=-1, high=1, size=nfts)
+        gmin, gmax = 1e-8, 1e-6
+        G = _prng.uniform(low=gmin, high=gmax, size=(2*nfts + 2, ncls))
+
+        return xit, G
 
     # #################
     # Testing `gdummyv`
@@ -556,15 +647,30 @@ if __name__ == '__main__':
     # Testing `compute_error_v`
     seed = 246
     print("Testing 'compute_error_v' implementations: ", end="\t")
-    results = []
+    results_D = []
     for func in (_compute_error_v_vanilla,
                  _compute_error_v_numpy,
                  _compute_error_v_jit):
         my_args = get_error_data(seed)
-        results.append(func(*my_args))
+        results_D.append(func(*my_args))
 
-    np.testing.assert_allclose(results[0], results[1])
-    np.testing.assert_allclose(results[0], results[2])
+    np.testing.assert_allclose(results_D[0], results_D[1])
+    np.testing.assert_allclose(results_D[0], results_D[2])
+    print("OK!")
+
+    # ##########################
+    # Testing `compute_currents`
+    seed = 468
+    print("Testing 'compute_currents' implementations: ", end="\t")
+    results_E = []
+    for func in (_compute_currents_vanilla,
+                 _compute_currents_numpy,
+                 _compute_currents_jit):
+        my_args = get_current_data(seed)
+        results_E.append(func(*my_args))
+
+    np.testing.assert_allclose(results_E[0], results_E[1])
+    np.testing.assert_allclose(results_E[0], results_E[2])
     print("OK!")
 
     print("\nIf you are reading this, then everything " +
