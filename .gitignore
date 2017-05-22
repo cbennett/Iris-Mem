@@ -6,6 +6,7 @@
 *.pdf
 
 *sandbox/*
+*ext_datasets/*
 
 *.ipynb_checkpoints/*
 *__pycache__/*
